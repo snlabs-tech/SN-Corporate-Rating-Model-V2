@@ -1,4 +1,3 @@
-[hardstop_rating_workflow.md](https://github.com/user-attachments/files/25363259/hardstop_rating_workflow.md)
 # Hardstop Rating Workflow
 
 This document explains how the model applies **distress hardstops** to
