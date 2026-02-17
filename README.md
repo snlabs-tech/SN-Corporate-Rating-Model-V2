@@ -13,8 +13,8 @@ V2 is a deterministic, transparent rating engine that:
 
 - Uses a 0–100 internal score mapped to a granular rating scale from `AAA` down to `C`.
 - Separates **quantitative** (financial) and **qualitative** (expert judgement) inputs, then combines them with effective weights.
-- Incorporates **multi‑period data** (three years), **Altman Z‑score**, **peer benchmarking**, and **distress hardstops**.
-- Optionally applies a **sovereign cap** and derives an **outlook** based on band position and distress trends. [web:21][web:22][web:29][web:77]
+- Incorporates **multi‑period data** (three years), **Altman Z‑score**, **peer benchmarking**, and optional **distress hardstops**.
+- Optionally applies a **sovereign cap** and derives an **outlook** based on band position and distress trends.
 
 The main entry point is the `RatingModel.compute_final_rating(...)` method, which returns a rich `RatingOutputs` object including diagnostic fields and a human‑readable explanation string.
 
@@ -32,7 +32,10 @@ The main entry point is the `RatingModel.compute_final_rating(...)` method, whic
 
 - `QualInputs`  
   Holds qualitative inputs:
-  - `factors_t0`, `factors_t1`: dictionaries of 1–5 qualitative scores (t0 primary, t1 for trend in distress outlook).
+  - `factors_t0`, `factors_t1`: dictionaries of 1–5 qualitative scores (t0 = primary assessment, t1 = used for trend in distress outlook).
+
+    **Scale convention (V2):** `1` = weakest, `5` = strongest.  
+    This is the opposite of V1, where `1` was strongest and `5` weakest.
 
 - `RatingOutputs`  
   Rich result object with:
@@ -49,9 +52,9 @@ The main entry point is the `RatingModel.compute_final_rating(...)` method, whic
 Core methods:
 
 - `compute_quantitative(quant_inputs)`  
-  - Ensures `altman_z` is present (either provided directly or computed from components via the classic Altman Z formula). [web:21][web:22]  
+  - Ensures `altman_z` is present (either provided directly or computed from components via the classic Altman Z formula). 
   - Scores each ratio using `RATIO_GRIDS` and groups them into families (`leverage`, `coverage`, `profit`, `other`, `altman`).  
-  - Computes a **peer positioning score** via `compute_peer_score`, comparing issuer ratios to peer averages. [web:29][web:77]  
+  - Computes a **peer positioning score** via `compute_peer_score`, comparing issuer ratios to peer averages and the count of valid quantitative items (used later for effective weighting). 
   - Outputs aggregate `quantitative_score`, optional `peer_score`, per‑bucket averages, and `altman_z`.
 
 - `compute_qualitative(qual_inputs)`  
@@ -60,7 +63,7 @@ Core methods:
 
 - `compute_distress_notches(fin_t0, altman_z)`  
   - Applies **distress hardstops** based on `interest_coverage`, `dscr`, and `altman_z`, using `DISTRESS_BANDS` and `MAX_DISTRESS_NOTCHES`.  
-  - Returns total **notch downgrades** and a dict of triggered ratios.
+  - Returns total **notch downgrades** and a dictionary listing which distress ratios breached their thresholds and what values they had.
 
 - `compute_final_rating(...)`  
   End‑to‑end engine:
@@ -69,7 +72,7 @@ Core methods:
   3. Compute `combined_score` and `uncapped_rating` via `score_to_rating`.
   4. Apply distress hardstops via `compute_distress_notches` and `move_notches` → `hardstop_rating`.
   5. Optionally apply a **sovereign cap** via `apply_sovereign_cap` → `final_rating`.
-  6. Derive base outlook from band position (`derive_outlook_band_only`) and adjust with distress trends (`derive_outlook_with_distress_trend`).
+  6. Derive the outlook: start from a base outlook based on band position (derive_outlook_band_only), adjust it for distress trends (derive_outlook_with_distress_trend), and, if a sovereign cap is binding and a sovereign outlook is provided, override the issuer outlook with the sovereign outlook.
   7. Build a narrative `rating_explanation` summarizing the logic.
 
 ---
@@ -86,7 +89,11 @@ Core methods:
 - Liquidity/other: `capex_dep`, `current_ratio`, `rollover_coverage`
 - Distress: `altman_z` (or components to compute it)
 
-Each ratio is scored using `RATIO_GRIDS[name] = [(low, high, score), ...]`, with scores in `{0, 25, 50, 75, 100}` and intuitive monotonicity (better ratios → higher scores). [web:21][web:22]
+Each ratio is scored using `RATIO_GRIDS[name] = [(low, high, score), ...]`, with scores in `{0, 25, 50, 75, 100}`.  
+For each ratio, the grid is defined so that more favorable values (for that specific ratio) receive higher scores, whether that means a higher value (e.g. coverage, margins) or a lower value (e.g. leverage).
+
+The quantitative block is also tolerant to missing data: if a ratio is not provided or cannot be scored from `RATIO_GRIDS`, it is skipped, and the quantitative score is computed from the remaining valid ratios.
+
 
 ### 3.2 Altman Z‑score
 
@@ -98,7 +105,7 @@ If `altman_z` is missing, the model computes it from components:
 - Market value of equity / total liabilities  
 - Sales / total assets
 
-Then applies the standard Z‑score weights, giving a distress indicator that feeds both the quantitative bucket and the hardstop logic. [web:21][web:22]
+Then applies the standard Z‑score weights, giving a distress indicator that feeds both the quantitative bucket and the hardstop logic. 
 
 ### 3.3 Qualitative factors (V2 convention)
 
@@ -111,17 +118,24 @@ and mapped as:
 
 - 5 → 100, 4 → 75, 3 → 50, 2 → 25, 1 → 0 (`QUAL_SCORE_SCALE`).
 
-This is **inverted vs V1**, where 1 was strongest and 5 weakest. V2’s direction is chosen for consistency with common “higher = better” Likert‑style scoring. [web:59]
+This is **inverted vs V1**, where 1 was strongest and 5 weakest. V2’s direction is chosen for consistency with common “higher = better” Likert‑style scoring. 
 
-Typical qualitative dimensions (flexible, user‑defined):
+Qualitative factors
 
-- Business risk and industry profile  
-- Market position, diversification, resilience  
-- Management quality and governance  
-- Financial policy, liquidity management, refinancing risk  
-- Country/sovereign risk, legal/institutional environment
+The model expects 1–5 scores for a set of qualitative factors, provided via the keys in `factors_t0` / `factors_t1`.  
+In the sample implementation, these include for example:
 
----
+- Business and industry risk (e.g. industry_risk, revenue_stability)
+- Market position and diversification (e.g. market_position, revenue_diversification)
+- Management quality and governance (e.g. management_quality, governance, financial_policy)
+- Liquidity and refinancing profile (e.g. liquidity_profile, refinancing_risk, wc_management_quality)
+- Country/sovereign and legal environment (e.g. sovereign_risk, legal_environment)
+
+The factor set is flexible in the sense that the model uses whatever keys are present in `factors_t0` / `factors_t1`: 
+if a factor is missing or has an invalid value, it is ignored, and only the remaining valid factors are averaged into the qualitative score.
+
+All valid qualitative factors are treated equally and averaged into a single qualitative score; there is no factor‑specific weighting in V2.
+
 
 ## 4. Rating scale, hardstops, and outlook
 
@@ -140,13 +154,13 @@ Distress hardstops are applied **after** the uncapped rating:
 - `DISTRESS_BANDS` specify thresholds and notch downgrades for:
   - `interest_coverage`
   - `dscr`
-  - `altman_z` (e.g. <1.8 typical distress zone) [web:21][web:22]
+  - `altman_z` (e.g. <1.8 typical distress zone)
 - `compute_distress_notches` aggregates these (capped by `MAX_DISTRESS_NOTCHES`) and returns:
   - `distress_notches` (usually ≤ 0),
   - `hardstop_details` keyed by ratio name.
 - `move_notches(grade, notches)` shifts the rating down the scale to get a **post‑distress** `hardstop_rating`.
 
-This mimics agency‑style “hardstop” logic where very weak coverage or Z‑scores limit the rating regardless of otherwise decent metrics. [web:27][web:30]
+This mimics agency‑style “hardstop” logic where very weak coverage or Z‑scores limit the rating regardless of otherwise decent metrics. 
 
 ### 4.3 Sovereign cap and outlook
 
