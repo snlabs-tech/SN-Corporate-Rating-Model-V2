@@ -26,7 +26,7 @@ The rating is built in three main layers:
     -   `dscr`
     -   `altman_z`
 
--   **Sovereign cap** (this document, optional)\
+-   **Sovereign cap** (optional feature)\
     Ensures the issuer is not rated above the sovereign.
 
 The **hardstop rating** is the outcome after applying the distress layer
