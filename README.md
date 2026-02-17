@@ -1,6 +1,6 @@
 # SN — Corporate Rating Model (V2)
 
-This repository contains **V2** of the SN corporate credit rating model: a rule‑based, multi‑period rating engine that combines quantitative financial metrics, qualitative assessments, peer benchmarking, distress hardstops, and an optional sovereign cap into a final issuer rating and outlook.
+This repository contains **V2** of the SN corporate credit rating model: a rule‑based, multi‑period rating engine that combines quantitative financial metrics, qualitative assessments, peer benchmarking, optional distress hardstops, and an optional sovereign cap into a final issuer rating and outlook.
 
 > V1 (`SN_CorporateRatingModel`) is kept as a **deprecated prototype** for educational purposes.  
 > V2 (`RatingModel`) is the **recommended** version for any analysis.
