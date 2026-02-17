@@ -1,4 +1,3 @@
-[Sovereign_Cap_Workflow.md](https://github.com/user-attachments/files/25375019/Sovereign_Cap_Workflow.md)
 # Sovereign Cap Workflow
 
 This document explains how the model applies a **sovereign cap**
