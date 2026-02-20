@@ -5,7 +5,7 @@ This repository contains **V2** of the SN corporate credit rating model: a deter
 > V1 (`SN_CorporateRatingModel`) is kept as a **deprecated prototype** for educational purposes.  
 > V2 (`RatingModel`) is the **recommended** version for any analysis.
 
-For the full methodology (conceptual framework, ratio families, overlays, limitations, and boundaries), see `methodology.md`.
+For the full methodology (conceptual framework, ratio families, overlays, limitations, and boundaries), see `00_Methodology_Overview.md`.
 
 ---
 
@@ -68,7 +68,7 @@ V2 is an expert‑designed, rule‑based scorecard that:
   - Distress hardstops / notching (downward only), when hardstops are enabled  
   - A sovereign cap overlay, when sovereign capping is enabled
 
-Detailed descriptions of ratio families, Altman Z, qualitative factors, and overlays are documented in `methodology.md`.
+Detailed descriptions of ratio families, Altman Z, qualitative factors, and overlays are documented in `00_Methodology_Overview.md`.
 
 ---
 
