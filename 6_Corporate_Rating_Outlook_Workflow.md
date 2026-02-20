@@ -1,194 +1,303 @@
 # Rating–Outlook Workflow
 
-This document explains how the model determines the **rating outlook** (Positive / Stable / Negative), given the different layers of logic: the score band, distress hardstops, and the sovereign cap.
+This document explains how the model determines the **rating outlook** (Positive / Stable / Negative), given the different layers of logic: the score band, the optional distress hardstops, and the optional sovereign cap.
 
 The key idea is: *the outlook is driven by the same mechanism that effectively constrains the rating* (pure score, distress, or sovereign).
 
 ---
 
-## 1. Building blocks
+## 1. Building Blocks
 
-### 1.1 Uncapped rating and score band
+### 1.1 Combined Score and Base Rating Band
 
 From the quantitative and qualitative blocks, the model computes:
 
-- `combined_score` (0–100).
-- `uncapped_rating` via `SCORE_TO_RATING` (e.g. 55.5 → BBB).
+* `combined_score` (0–100)
+* `base_rating` via `SCORE_TO_RATING` (e.g. 55.5 → BBB)
 
-Each rating grade has a numeric **band** \([band_min, band_max]\) in score space (e.g. BBB = 55–59).
+Each rating grade has a numeric **band** `[band_min, band_max]` in score space (e.g. BBB = 55–59).
 
-`derive_outlook_band_only(combined_score, uncapped_rating)`:
+`derive_outlook_band_only(combined_score, rating)`:
 
-1. Looks up the band for `uncapped_rating`.
-2. Floors the score and clips it to the band:  
-   - `cs = floor(combined_score)`  
-   - `cs = max(band_min, min(cs, band_max))`
-3. Maps position to outlook:  
-   - `cs == band_max` → **Positive**.  
-   - `cs == band_min` → **Negative**.  
-   - Otherwise → **Stable**.
+1. Looks up the band for `rating`.
+2. Floors the combined score: `cs = floor(combined_score)`.
+3. Maps position to outlook:
+
+   * `cs == band_max` → **Positive**
+   * `cs == band_min` → **Negative**
+   * Otherwise → **Stable**
 
 So within a given rating grade, the bottom of the band is Negative, the top is Positive, and the middle is Stable.
 
+> In the current implementation the base outlook is always derived from the **base_rating** and `combined_score` (before hardstops and cap).
+
 ---
 
-### 1.2 Distress hardstops and trends
+### 1.2 Distress Hardstops and Trends
 
-Distress hardstops use:
+Distress hardstops use three quantitative indicators:
 
-- Interest coverage.
-- DSCR.
-- Altman Z‑score.
+* `interest_coverage`
+* `dscr`
+* `altman_z`
 
-`compute_distress_notches`:
+`compute_distress_notches(fin_t0, altman_z)`:
 
-- For each distress metric, checks if it falls below its threshold bands (`DISTRESS_BANDS`).
-- Sums the associated negative notches (capped at `MAX_DISTRESS_NOTCHES`).
-- Returns `(distress_notches, hardstop_details)`.
+* For each distress metric, checks if it falls below its threshold bands in `DISTRESS_BANDS`.
+* Sums the associated negative notches (floored at `MAX_DISTRESS_NOTCHES`).
+* Returns `(distress_notches, hardstop_details)`.
 
 `derive_outlook_with_distress_trend(base_outlook, distress_notches, fin_t0, fin_t1)`:
 
-- If `distress_notches >= 0`:
-  - Returns `base_outlook` unchanged.
-- If `distress_notches < 0` (distress active):
-  - Compares t1 → t0 for `interest_coverage`, `dscr`, `altman_z`.
-  - Sets flags:
-    - `improving = True` if any ratio increased.
-    - `deteriorating = True` if any ratio decreased.
-  - Rules:
-    - Improving and **not** deteriorating → **Stable**.
-    - Deteriorating and **not** improving → **Negative**.
-    - Mixed / flat → **Stable**.
+* If `distress_notches >= 0`:
 
-Important: under distress, the outlook is at most **Stable**; you do not get a **Positive** outlook while you are still being notched down for distress.
+  * Returns `base_outlook` unchanged.
+* If `distress_notches < 0` (distress active):
 
----
+  * Compares t1 → t0 for `interest_coverage`, `dscr`, `altman_z`:
 
-### 1.3 Sovereign cap
+    * For each metric with values in both periods:
 
-If enabled, the sovereign cap ensures the issuer is not rated above the sovereign on the same internal scale.
+      * If `t0 > t1` → flag as **improving**
+      * If `t0 < t1` → flag as **deteriorating**
+  * Rules:
 
-- `apply_sovereign_cap(hardstop_rating, sovereign_rating)`:
-  - Returns the worse of (hardstop_rating, sovereign_rating) along `RATING_SCALE`.
+    * Improving and not deteriorating → **Stable**
+    * Deteriorating and not improving → **Negative**
+    * Mixed / flat → **Stable**
 
-When the cap is **binding** (i.e. it actually lowers the post‑distress rating):
-
-- If `sovereign_outlook` is one of {Positive, Stable, Negative}, the issuer’s outlook is **set equal** to the sovereign outlook.
-- In this case, the internal band/distress-based outlook is effectively overridden.
+Important: the trend overlay only runs when **hardstops have actually bitten** (`distress_notches < 0`) and the sovereign cap is not binding. It cannot create a Positive outlook; it only moves between Stable and Negative.
 
 ---
 
-## 2. Decision ladder
+### 1.3 Sovereign Cap and Binding Definition
 
-The model uses the following ladder to determine the **final outlook**:
+If enabled, the sovereign cap ensures the issuer is not rated above the sovereign on the internal scale:
 
-1. **Compute base outlook from the uncapped rating band**  
-   - `base_outlook = derive_outlook_band_only(combined_score, uncapped_rating)`
-   - This gives Positive / Stable / Negative purely from where the score sits inside the uncapped rating band.
+* `apply_sovereign_cap(hardstop_rating, sovereign_rating)` returns the worse of the two ratings according to `RATING_SCALE`.
 
-2. **Apply distress overlay (if hardstops are enabled and active)**  
-   - If `enable_hardstops = False` OR `distress_notches >= 0`:
-     - `outlook_after_distress = base_outlook`.
-   - If `enable_hardstops = True` AND `distress_notches < 0`:
-     - `outlook_after_distress = derive_outlook_with_distress_trend(base_outlook, distress_notches, fin_t0, fin_t1)`.
-     - This can move the outlook to **Negative** (deteriorating) or **Stable** (improving/mixed) but never to Positive.
+After applying hardstops (if any), the model computes:
 
-3. **Apply sovereign cap overlay (if enabled and binding)**  
-   - If `enable_sovereign_cap = True` and `apply_sovereign_cap` lowers the rating relative to `hardstop_rating`:
-     - `final_outlook = sovereign_outlook` (if valid), else Stable.
-   - Otherwise:
-     - `final_outlook = outlook_after_distress`.
+```python
+capped_rating = hardstop_rating
+if enable_sovereign_cap and sovereign_rating is not None:
+    capped_rating = apply_sovereign_cap(hardstop_rating, sovereign_rating)
 
-4. **AAA safeguard**  
-   - If `final_rating == "AAA"` and `final_outlook == "Positive"`:
-     - Set `final_outlook = "Stable"`.
+final_rating = capped_rating
+```
 
----
+The cap is considered binding if:
 
-## 3. Scenario summary
+```python
+sovereign_cap_binding = (
+    enable_sovereign_cap
+    and sovereign_rating is not None
+    and final_rating == sovereign_rating
+)
+```
 
-### Scenario A – Hardstops OFF, Sovereign cap OFF
-
-- `enable_hardstops = False`, `enable_sovereign_cap = False`.
-- Distress notches ignored (`distress_notches` forced to 0).
-- Final rating = uncapped rating.
-- Outlook = **band-based** only:
-  - Bottom of band → Negative.
-  - Top of band → Positive.
-  - Middle → Stable.
-
-Use this when you want a **pure score-driven** outlook.
+Binding means the final rating sits at the sovereign level under an active cap (either because the issuer was above and got cut down, or because it is exactly at the sovereign ceiling).
 
 ---
 
-### Scenario B – Hardstops ON, no distress
+## 2. Outlook Decision Ladder
 
-- `enable_hardstops = True`, but all distress metrics above their comfort thresholds.
-- `distress_notches >= 0` → distress overlay does nothing.
-- Outlook = **band-based** (as in Scenario A).
+The model uses the following ladder to determine the final outlook.
 
-Use this when there is **no distress**, so distress logic is inert.
+### 2.1 Base Outlook from the Base Rating Band
 
----
+First, the model derives a band-based base outlook:
 
-### Scenario C – Hardstops ON, distress deteriorating
+```python
+base_outlook = derive_outlook_band_only(combined_score, base_rating)
+```
 
-- `enable_hardstops = True`, `distress_notches < 0`.
-- From t1 → t0, distress metrics (coverage / DSCR / Altman Z) **worsen**.
-- Outlook:
-  - Distress trend overlay forces **Negative**, even if the band alone would have suggested Stable or Positive.
-
-Interpretation: the entity is in a distressed zone and getting worse, so outlook must be Negative.
+This uses the base (unconstrained) rating and places the combined score within that band to get Positive / Stable / Negative.
 
 ---
 
-### Scenario D – Hardstops ON, distress improving
+### 2.2 Sovereign-Binding Branch
 
-- `enable_hardstops = True`, `distress_notches < 0`.
-- Distress metrics under their thresholds but **improving** vs t1.
-- Outlook:
-  - Distress trend overlay forces **Stable** (you stay notched down, but the trend is improving).
+If the sovereign cap is binding and a valid `sovereign_outlook` is provided:
 
-Interpretation: still in distress, but on a better trajectory; no Positive outlook until hardstops no longer apply.
+```python
+if (
+    sovereign_cap_binding
+    and sovereign_outlook in {"Positive", "Stable", "Negative"}
+):
+    if (
+        hardstop_rating == capped_rating == sovereign_rating
+        and base_outlook == sovereign_outlook
+    ):
+        outlook = base_outlook
+    else:
+        if base_outlook == "Positive" and sovereign_outlook in {"Stable", "Negative"}:
+            outlook = sovereign_outlook
+        elif base_outlook == "Negative" or sovereign_outlook == "Negative":
+            outlook = "Negative"
+        else:
+            outlook = "Stable"
+```
 
----
+**Interpretation**
 
-### Scenario E – Hardstops ON, mixed/flat distress trend
+**Exact alignment case:**
+If the post-distress rating, capped rating, and sovereign rating are all the same and the base outlook already matches the sovereign outlook, the model keeps the band-based base outlook.
 
-- `enable_hardstops = True`, `distress_notches < 0`.
-- Distress metrics show a mix of small improvements and deteriorations or are largely flat.
-- Outlook:
-  - Distress trend overlay forces **Stable**.
+**Otherwise:**
 
-Interpretation: distress exists, but trend is not clearly worsening; Negative outlook is reserved for clearly deteriorating distress.
+* If the model is more optimistic than the sovereign (`base_outlook = Positive`, sovereign_outlook = Stable or Negative), the sovereign view dominates and the issuer outlook is aligned down to the sovereign’s stance.
+* If either side is Negative (base or sovereign), the final outlook is set to Negative.
+* In all other non-negative combinations, the outlook is set to Stable, reflecting a deliberately conservative stance that avoids signalling upside momentum when the issuer is constrained by a binding sovereign cap.
 
----
-
-### Scenario F – Sovereign cap ON and binding
-
-- `enable_sovereign_cap = True`.
-- After hardstops, `hardstop_rating` is **above** `sovereign_rating`, so `apply_sovereign_cap` lowers it.
-- Final rating = sovereign‑capped rating.
-- Final outlook = **sovereign_outlook** (if Positive/Stable/Negative, else Stable).
-
-Interpretation: external constraint from the sovereign dominates both rating and outlook.
-
----
-
-### Scenario G – Sovereign cap ON but not binding
-
-- `enable_sovereign_cap = True`, but `hardstop_rating` ≤ `sovereign_rating`.
-- Final rating = hardstop rating.
-- Outlook = result of band + distress logic (Scenarios A–E).
-
-Interpretation: internal logic fully determines the issuer’s outlook; the sovereign cap is not active in practice.
+In this branch, the sovereign becomes the anchor for the outlook whenever it is actually constraining the rating.
 
 ---
 
-## 4. Design intent (intuitive summary)
+### 2.3 Non-Binding / No-Cap Branch (Distress Trend Overlay)
 
-- **If only the combined score matters** (no distress, no binding sovereign cap), the outlook is simply a function of where the score sits within the **uncapped rating band**.
-- **If distress is actively notching the rating down**, the outlook cannot be Positive; it becomes either Stable (if distress is improving or mixed) or Negative (if distress is clearly deteriorating).
-- **If the sovereign cap binds**, the sovereign’s own rating and outlook become the anchor, and the issuer’s outlook aligns to that.
+If the cap is not binding (or not enabled), the model falls back to distress-trend logic:
 
-This structure keeps the outlook consistent with the main driver of the rating in each case: pure score, distress constraints, or sovereign ceiling.
+```python
+else:
+    outlook = derive_outlook_with_distress_trend(
+        base_outlook,
+        distress_notches,
+        quant_inputs.fin_t0,
+        quant_inputs.fin_t1,
+    )
+```
+
+* If `distress_notches >= 0` (no distress downgrade), `derive_outlook_with_distress_trend` simply returns `base_outlook`.
+* If `distress_notches < 0`, it may push the outlook to Negative (clearly deteriorating distress) or to Stable (improving / mixed), but never to Positive.
+
+In other words, when the sovereign is not constraining the rating, distress dynamics are allowed to modify the band-based outlook.
+
+---
+
+### 2.4 AAA Guardrail
+
+Finally, the model applies a simple guard on the maximum rating:
+
+```python
+if final_rating == "AAA" and outlook == "Positive":
+    outlook = "Stable"
+```
+
+As a policy choice, the model does not use a Positive outlook at AAA, because the rating is already at the top of the scale and cannot be upgraded. Any intermediate AAA/Positive combination is reset to AAA/Stable.
+
+---
+
+## 3. Scenario Summary
+
+### Scenario A – Hardstops OFF, Sovereign Cap OFF
+
+* `enable_hardstops = False`
+* `enable_sovereign_cap = False`
+
+**Effects:**
+
+* `distress_notches = 0`, `hardstop_rating = base_rating`.
+* `sovereign_cap_binding = False`.
+* Outlook = band-based only via `derive_outlook_band_only`.
+
+Use this when you want a pure score-driven rating and outlook.
+
+---
+
+### Scenario B – Hardstops ON, No Distress, Cap OFF / Non-Binding
+
+* `enable_hardstops = True`
+* `distress_notches >= 0`
+* Either `enable_sovereign_cap = False` or cap not binding
+
+**Effects:**
+
+* Hardstop layer does not change the rating.
+* Distress trend overlay returns `base_outlook` unchanged.
+* Outlook = band-based (same as Scenario A).
+
+Use this when distress metrics are comfortably above thresholds.
+
+---
+
+### Scenario C – Hardstops ON, Distress Deteriorating, Cap Non-Binding
+
+* `enable_hardstops = True`
+* `distress_notches < 0`
+* Distress ratios between t1 and t0 deteriorate (and do not improve)
+* Sovereign cap not binding
+
+**Effects:**
+
+* `derive_outlook_with_distress_trend` sets outlook to Negative, even if the band alone would have suggested Stable or Positive.
+
+**Interpretation:** the issuer is in a distressed zone and getting worse; outlook must be Negative.
+
+---
+
+### Scenario D – Hardstops ON, Distress Improving or Mixed, Cap Non-Binding
+
+* `enable_hardstops = True`
+* `distress_notches < 0`
+* Distress ratios under their thresholds but either:
+
+  * Clearly improving and not deteriorating, or
+  * Mixed/flat
+
+**Effects:**
+
+* Distress trend overlay forces Stable (you remain notched down, but the trend is not clearly worsening).
+
+**Interpretation:** the entity is still under distress constraints, but the trend does not justify a Negative outlook.
+
+---
+
+### Scenario E – Sovereign Cap ON and Binding
+
+* `enable_sovereign_cap = True`, `sovereign_rating` provided
+* `final_rating` equals `sovereign_rating` under the cap
+* `sovereign_cap_binding = True`
+
+**Effects:**
+
+* If ratings and outlook are already aligned (special case), base outlook can be kept.
+* Otherwise:
+
+  * More optimistic than sovereign (e.g. Positive vs Stable/Negative) → aligned down to sovereign stance or Stable.
+  * Any Negative from either side → outlook set to Negative.
+  * All other non-negative combinations → outlook set to Stable.
+
+**Interpretation:** once the sovereign ceiling binds, the sovereign’s stance effectively dominates the issuer outlook.
+
+---
+
+### Scenario F – Sovereign Cap ON but Not Binding
+
+* `enable_sovereign_cap = True`, but issuer is not constrained (issuer ≤ sovereign)
+* `sovereign_cap_binding = False`
+
+**Effects:**
+
+* Final rating = hardstop rating.
+* Outlook = result of band + distress logic (Scenarios A–D).
+
+**Interpretation:** sovereign information is available but not constraining; the issuer’s own fundamentals and distress trends drive the outlook.
+
+---
+
+## 4. Design Intent (Intuitive Summary)
+
+### Pure Score Environment (No Distress, No Binding Cap)
+
+Outlook is a function of where the combined score sits within the base rating band.
+
+### Distress Environment (Hardstops Active, Cap Non-Binding)
+
+Outlook cannot be more optimistic than the distress state: it is either Stable (improving or mixed distress trend) or Negative (clearly deteriorating), but never Positive while distress notches are in force.
+
+### Sovereign-Constrained Environment (Cap Binding)
+
+The sovereign’s rating and outlook become the effective ceiling, and the issuer’s outlook is anchored to that stance, with conservative rules to avoid Positive signals under a binding cap.
+
+This structure keeps the outlook consistent with the main driver of the rating in each case: pure score, dis
