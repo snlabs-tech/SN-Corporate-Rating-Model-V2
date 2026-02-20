@@ -1,50 +1,43 @@
 # Hardstop Rating Workflow
 
-This document explains how the model applies **distress hardstops** to
-notch the rating down when key risk indicators signal elevated distress.
-It also describes how the resulting **hardstop rating** interacts with
-the uncapped rating and the sovereign cap.
+This document explains how the model applies **distress hardstops** to notch the rating down when key risk indicators signal elevated distress. It also describes how the resulting **hardstop rating** interacts with the unconstrained (base) rating and, indirectly, with the sovereign cap.
 
-The goal is to prevent a situation where strong averages or good
-profitability fully offset near-default coverage or Altman Z metrics.
+The goal is to prevent situations where strong averages or good profitability fully offset near-default coverage or Altman Z-score metrics.
 
-------------------------------------------------------------------------
+---
 
 ## 1. Distress Layer in the Rating Stack
 
 The rating is built in three main layers:
 
-1.  **Uncapped rating**\
-    Derived from the combined quantitative and qualitative score using
-    `SCORE_TO_RATING`.
+1. **Base rating (unconstrained)**
+   Derived from the combined quantitative and qualitative score using `SCORE_TO_RATING` (no distress overlay, no sovereign cap).
 
-2.  **Distress hardstops (this document)**\
-    Apply notch-down adjustments based on:
+2. **Distress hardstops (this layer, optional)**
+   Apply notch-down adjustments based on:
 
-    -   Interest coverage\
-    -   DSCR\
-    -   Altman Z-score
+   * `interest_coverage`
+   * `dscr`
+   * `altman_z`
 
-3.  **Sovereign cap (optional)**\
-    Ensures the issuer is not rated above the sovereign.
+3. **Sovereign cap (optional)**
+   Ensures the final issuer rating is not better than the specified sovereign rating when the cap is enabled.
 
-The **hardstop rating** is the outcome after applying the distress layer
-to the uncapped rating.
+The **hardstop rating** is the outcome after applying the distress layer to the base rating. When `enable_hardstops` is `False`, the hardstop rating is equal to the base rating and the distress layer is effectively inactive.
 
-------------------------------------------------------------------------
+---
 
 ## 2. Distress Metrics and Bands
 
 Three metrics are used for hardstops:
 
--   `interest_coverage` --- Interest coverage ratio\
--   `dscr` --- Debt service coverage ratio\
--   `altman_z` --- Altman Z-score
+* `interest_coverage` — interest coverage ratio
+* `dscr` — debt service coverage ratio
+* `altman_z` — Altman Z-score
 
-Each metric has a set of **bands** with associated **negative notches**
-(values are illustrative):
+Each metric has a set of **bands** with associated **negative notches**:
 
-``` python
+```python
 DISTRESS_BANDS = {
     "interest_coverage": [
         (0.5, -4),
@@ -66,23 +59,26 @@ DISTRESS_BANDS = {
 MAX_DISTRESS_NOTCHES = -4
 ```
 
-### Interpretation (example for interest coverage)
+### Interpretation (example for `interest_coverage`)
 
--   Interest coverage \< 0.5 → −4 notches\
--   0.5 ≤ coverage \< 0.8 → −3 notches\
--   0.8 ≤ coverage \< 1.0 → −2 notches\
--   Coverage ≥ 1.0 → No hardstop from this metric
+* `interest_coverage < 0.5` → −4 notches
+* `0.5 ≤ interest_coverage < 0.8` → −3 notches
+* `0.8 ≤ interest_coverage < 1.0` → −2 notches
+* `interest_coverage ≥ 1.0` → no downgrade from this metric
 
-The same logic applies to `dscr` and `altman_z`.
+The same pattern applies to `dscr` and `altman_z`: the model looks for the first threshold that the metric falls below and applies the corresponding negative notches.
 
-------------------------------------------------------------------------
+---
 
 ## 3. How Distress Notches Are Calculated
 
-The core function:
+Core function in the engine:
 
-``` python
-def compute_distress_notches(fin: Dict[str, float], altman_z: float) -> Tuple[int, Dict[str, float]]:
+```python
+def compute_distress_notches(
+    fin: Dict[str, float],
+    altman_z: float,
+) -> Tuple[int, Dict[str, float]]:
     total_notches = 0
     details: Dict[str, float] = {}
 
@@ -101,139 +97,196 @@ def compute_distress_notches(fin: Dict[str, float], altman_z: float) -> Tuple[in
     return total_notches, details
 ```
 
-### Step-by-Step Logic
+### Step-by-step logic
 
-**Interest coverage** - Retrieve `fin.get("interest_coverage")` - Find
-the first `(threshold, notches)` where the value is below the
-threshold - Add negative notches to `total_notches` - Store value in
-`details["interest_coverage"]`
+#### Interest coverage
 
-**DSCR** - Same pattern using `DISTRESS_BANDS["dscr"]` - Add additional
-negative notches if DSCR is low - Store value in `details["dscr"]`
+* Read `ic = fin.get("interest_coverage")`.
+* If present, iterate through `DISTRESS_BANDS["interest_coverage"]` in order.
+* For the first `(threshold, notches)` with `ic < threshold`, add `notches` (negative) to `total_notches` and store `ic` in `details["interest_coverage"]`.
+* If no threshold is breached, this metric does not contribute.
 
-**Altman Z** - Compare `altman_z` to its bands - Add negative notches
-and record in `details["altman_z"]`
+#### DSCR
 
-**Cap the total** If total notches \< `MAX_DISTRESS_NOTCHES`, clamp to
-`MAX_DISTRESS_NOTCHES`.
+* Same pattern using `DISTRESS_BANDS["dscr"]` and `fin.get("dscr")`.
+* Add any negative notches to `total_notches` and store the value in `details["dscr"]` if triggered.
 
-------------------------------------------------------------------------
+#### Altman Z
 
-### Output
+* Compare `altman_z` (already computed or supplied) to `DISTRESS_BANDS["altman_z"]`.
+* On the first breached threshold, add notches to `total_notches` and store the score in `details["altman_z"]`.
 
--   `distress_notches`
-    -   `0` → No hardstop\
-    -   Negative (e.g. −2, −3) → Downgrade notches
--   `details`
-    -   Dictionary indicating which metrics triggered the hardstop
+#### Cap the total
 
-------------------------------------------------------------------------
+After aggregating contributions from all three metrics, apply the floor:
 
-## 4. How the Hardstop Rating Is Applied
+* If `total_notches < MAX_DISTRESS_NOTCHES`, set `total_notches = MAX_DISTRESS_NOTCHES`.
 
-Inside `compute_final_rating`:
+This limits the overall downgrade from distress to a maximum of 4 notches.
+
+### Output of `compute_distress_notches`
+
+* `distress_notches`
+
+  * `0` → no distress-driven downgrade
+  * negative (e.g. −1, −2, −3, −4) → total downgrade in notches
+
+* `details`
+
+  * dictionary indicating which metrics triggered (keys) and their values at t0
+
+---
+
+## 4. Applying the Hardstop Rating
+
+Within `compute_final_rating` the distress overlay is optional and controlled by a flag.
+
+### 4.1 Activation
 
 If hardstops are enabled:
 
-``` python
-distress_notches, hardstop_details = self.compute_distress_notches(fin_t0, altman_z)
+```python
+if enable_hardstops:
+    distress_notches, hardstop_details = self.compute_distress_notches(
+        quant_inputs.fin_t0,
+        altman_z,
+    )
+else:
+    distress_notches = 0
+    hardstop_details = {}
 ```
 
-If disabled:
+When `enable_hardstops` is `False`, the layer is fully inactive and no downgrade is applied.
 
-``` python
-distress_notches = 0
-hardstop_details = {}
-```
+### 4.2 From Base Rating to Hardstop Rating
 
-Apply notches:
+The model then applies the notches to the base rating:
 
-``` python
-hardstop_rating = move_notches(uncapped_rating, distress_notches)
+```python
+hardstop_rating = move_notches(base_rating, distress_notches)
 hardstop_triggered = distress_notches < 0
 ```
 
-The hardstop rating is then passed to the sovereign cap logic.
+`move_notches` shifts the rating down the internal `RATING_SCALE` by the number of notches (negative values mean moving to weaker grades).
 
-------------------------------------------------------------------------
+* If `distress_notches == 0`, `hardstop_rating` equals `base_rating` and `hardstop_triggered` is `False`.
+* If `distress_notches < 0`, the hardstop rating is weaker than the base rating and `hardstop_triggered` is `True`.
+
+The hardstop rating is then passed into the sovereign cap step (if that module is enabled).
+
+---
 
 ## 5. Scenario Overview
 
-### Scenario A -- No Distress
+### Scenario A – No Distress
 
--   `distress_notches = 0`
--   `hardstop_rating = uncapped_rating`
--   `hardstop_triggered = False`
+* `distress_notches = 0`
+* `hardstop_rating = base_rating`
+* `hardstop_triggered = False`
 
-Distress layer inactive.
+The distress layer is inactive either because the indicators are above thresholds or because hardstops are disabled.
 
-------------------------------------------------------------------------
+---
 
-### Scenario B -- Mild Distress
+### Scenario B – Mild Distress
 
-Example: - Interest coverage slightly below 1.0 - DSCR slightly below
-1.0 - Altman Z above threshold
+Example:
 
-Illustrative result: - −2 notches (coverage) - −1 notch (DSCR) - 0
-(Altman)
+* `interest_coverage` slightly below 1.0
+* `dscr` slightly below 1.0
+* `altman_z` above its distress thresholds
 
-Uncapped = BBB\
-Hardstop = BB
+Illustrative outcome:
 
-Distress forces downgrade.
+* −2 notches from interest coverage
+* −1 notch from dscr
+* 0 from altman_z
 
-------------------------------------------------------------------------
+Total: −3 notches (above the −4 floor).
 
-### Scenario C -- Severe Distress
+If:
 
-Example: - Interest coverage \< 0.5 - Altman Z \< 1.2 - DSCR \< 0.8
+* `base_rating = BBB`
 
-Raw total could be −11\
-Capped at −4
+Then:
 
-Uncapped = BBB\
-Hardstop = B
+* `hardstop_rating = BB−` (three notches lower on the internal scale)
 
-Downgrade limited by cap.
+Distress forces a moderate downgrade, even if other ratios look acceptable.
 
-------------------------------------------------------------------------
+---
 
-### Scenario D -- Improving Trend
+### Scenario C – Severe Distress
 
-Absolute levels still determine rating level.
+Example:
 
-Improving metrics may affect outlook but not remove hardstop until
-thresholds are crossed.
+* `interest_coverage < 0.5`
+* `dscr < 0.8`
+* `altman_z < 1.2`
 
-------------------------------------------------------------------------
+Raw contributions might sum to more than −4 (for example −11), but:
 
-### Scenario E -- Hardstops Disabled
+* `total_notches` is floored at `MAX_DISTRESS_NOTCHES = -4`
 
--   `distress_notches = 0`
--   `hardstop_rating = uncapped_rating`
--   Distress layer fully inactive.
+If:
 
-------------------------------------------------------------------------
+* `base_rating = BBB`
+
+Then:
+
+* `hardstop_rating = B` (four-notch downgrade)
+
+The downgrade is significant but still bounded.
+
+---
+
+### Scenario D – Improving Trend
+
+Improving distress ratios do not automatically remove an active hardstop; absolute levels still determine whether thresholds are breached and whether a downgrade is applied.
+
+However:
+
+* When hardstops have actually bitten (`distress_notches < 0`) and the sovereign cap is not binding, the outlook can be adjusted based on the trend in these ratios between t1 and t0 (see main methodology for outlook logic).
+
+This allows the model to distinguish between a static weak situation and a weak but improving one.
+
+---
+
+### Scenario E – Hardstops Disabled
+
+If `enable_hardstops = False`:
+
+* `distress_notches = 0`
+* `hardstop_rating = base_rating`
+* `hardstop_triggered = False`
+* `hardstop_details = {}`
+
+The distress layer is fully bypassed. The model then proceeds directly from the base rating to the sovereign cap logic (if enabled).
+
+---
 
 ## 6. Interaction with Sovereign Cap
 
-Final flow:
+The overall rating flow is:
 
-Uncapped rating → Hardstop rating → Sovereign-capped final rating
+`base rating → hardstop rating → sovereign-capped final rating`
 
-If sovereign rating is lower, it overrides the hardstop rating.
+The hardstop rating is the starting point for the sovereign cap.
 
-------------------------------------------------------------------------
+* If the cap is disabled or non-binding, the final rating equals the hardstop rating.
+* If the cap is enabled and the sovereign rating is weaker, it constrains the issuer to be no better than the sovereign.
+
+The hardstop layer and the sovereign cap are both optional, controlled independently by `enable_hardstops` and `enable_sovereign_cap`.
+
+---
 
 ## 7. Design Intent
 
-The hardstop layer:
+The distress hardstop layer:
 
--   Is non-compensatory\
--   Prevents strong averages from masking distress\
--   Uses transparent notching\
--   Is bounded by `MAX_DISTRESS_NOTCHES`\
--   Can be toggled with `enable_hardstops`
+* Is non-compensatory: sufficiently weak coverage or Altman Z cannot be fully offset by strength elsewhere.
+* Uses transparent, rule-based notching based on a small set of well-defined distress metrics.
+* Is bounded by `MAX_DISTRESS_NOTCHES` to avoid extreme downgrades from overlays.
+* Is optional and can be toggled via `enable_hardstops` depending on use case and risk appetite.
 
-Together with outlook logic, this behaves like a disciplined internal
-rating framework rather than a purely mechanical score.
+In combination with the main scoring engine, the distress overlay ensures that near-default profiles are consistently reflected in the rating.
