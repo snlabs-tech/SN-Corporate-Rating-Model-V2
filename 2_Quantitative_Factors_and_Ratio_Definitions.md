@@ -258,3 +258,4 @@ The quantitative block is tolerant to missing data:
 - If a ratio is not provided or cannot be mapped in `RATIO_GRIDS`, it is skipped.  
 - The aggregate quantitative score is computed from the remaining valid ratios.  
 - The number of valid quantitative items is tracked and used in `compute_effective_weights` to derive the relative weight of the quantitative block.
+
