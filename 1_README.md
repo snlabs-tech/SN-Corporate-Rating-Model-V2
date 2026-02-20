@@ -1,190 +1,271 @@
 # SN — Corporate Rating Model (V2)
 
-This repository contains **V2** of the SN corporate credit rating model: a rule‑based, multi‑period rating engine that combines quantitative financial metrics, qualitative assessments, peer benchmarking, optional distress hardstops, and an optional sovereign cap into a final issuer rating and outlook.
+This repository contains **V2** of the SN corporate credit rating model: a deterministic, rules‑based rating engine that translates standardized financial and qualitative inputs into an internal issuer rating and outlook on an AAA–D‑style scale. The model is designed to differentiate **structural** credit quality rather than to forecast short‑term default events and prioritizes transparency, auditability, and governance over statistical optimization. 
 
 > V1 (`SN_CorporateRatingModel`) is kept as a **deprecated prototype** for educational purposes.  
 > V2 (`RatingModel`) is the **recommended** version for any analysis.
 
 ---
 
-## 1. Core concepts
+## 1. Executive Summary
 
-V2 is a deterministic, transparent rating engine that:
+The V2 corporate rating model provides a transparent, rule‑based framework to assign long‑term issuer ratings to corporate obligors using standardized financial ratios, a small set of qualitative factors, and optional structured overlays for distress and sovereign risk. 
 
-- Uses a 0–100 internal score mapped to a granular rating scale from `AAA` down to `C`.
-- Separates **quantitative** (financial) and **qualitative** (expert judgement) inputs, then combines them with effective weights.
-- Incorporates **multi‑period data** (three years), **Altman Z‑score**, **peer benchmarking**, and optional **distress hardstops**.
-- Optionally applies a **sovereign cap** and derives an **outlook** based on band position and distress trends.
+Core characteristics:
 
-The main entry point is the `RatingModel.compute_final_rating(...)` method, which returns a rich `RatingOutputs` object including diagnostic fields and a human‑readable explanation string.
+- Outputs ratings on an internal long‑term scale conceptually aligned with AAA–D, with a clear investment‑grade / speculative‑grade boundary. 
+- Separates **quantitative** (financial ratios, Altman Z‑score) and **qualitative** (1–5 expert scores) inputs, then combines them with effective weights.  
+- Uses monotone, contiguous **ratio grids** and an Altman‑style distress overlay plus an optional **sovereign cap**.  
+- Is explicitly through‑the‑cycle and **deterministic**: given the same inputs, the same rating and outlook are always produced.
 
----
-
-## 2. Key components
-
-### 2.1 Data structures
-
-- `QuantInputs`  
-  Holds quantitative inputs:
-  - `fin_t0`, `fin_t1`, `fin_t2`: dictionaries of financial ratios for three time points.
-  - `components_t0`, `components_t1`, `components_t2`: Altman Z components (working capital, total assets, etc.).
-  - `peers_t0`: peer group ratios for relative positioning.
-
-- `QualInputs`  
-  Holds qualitative inputs:
-  - `factors_t0`, `factors_t1`: dictionaries of 1–5 qualitative scores (t0 = primary assessment, t1 = used for trend in distress outlook).
-
-    **Scale convention (V2):** `1` = weakest, `5` = strongest.  
-    This is the opposite of V1, where `1` was strongest and `5` weakest.
-
-- `RatingOutputs`  
-  Rich result object with:
-  - Scores: `quantitative_score`, `qualitative_score`, `combined_score`, `peer_score`.
-  - Ratings: `uncapped_rating`, `hardstop_rating`, `final_rating`, `distress_notches`.
-  - Outlook & caps: `sovereign_rating`, `sovereign_outlook`, `outlook`, `hardstop_triggered`, `flags`.
-  - Diagnostics: `bucket_avgs` (per ratio family), `altman_z_t0`, `hardstop_details`, `rating_explanation`.
-
-### 2.2 RatingModel
-
-- `RatingModel(cp_name: str)`  
-  Main class representing the corporate issuer.
-
-Core methods:
-
-- `compute_quantitative(quant_inputs)`  
-  - Ensures `altman_z` is present (either provided directly or computed from components via the classic Altman Z formula). 
-  - Scores each ratio using `RATIO_GRIDS` and groups them into families (`leverage`, `coverage`, `profit`, `other`, `altman`).  
-  - Computes a **peer positioning score** via `compute_peer_score`, comparing issuer ratios to peer averages and the count of valid quantitative items (used later for effective weighting). 
-  - Outputs aggregate `quantitative_score`, optional `peer_score`, per‑bucket averages, and `altman_z`.
-
-- `compute_qualitative(qual_inputs)`  
-  - Maps 1–5 qualitative scores to 0–100 via `QUAL_SCORE_SCALE`.  
-  - Returns an average `qualitative_score` and the count of valid qualitative items.
-
-- `compute_distress_notches(fin_t0, altman_z)`  
-  - Applies **distress hardstops** based on `interest_coverage`, `dscr`, and `altman_z`, using `DISTRESS_BANDS` and `MAX_DISTRESS_NOTCHES`.  
-  - Returns total **notch downgrades** and a dictionary listing which distress ratios breached their thresholds and what values they had.
-
-- `compute_final_rating(...)`  
-  End‑to‑end engine:
-  1. Compute quantitative and qualitative scores.
-  2. Derive effective weights via `compute_effective_weights` (from configured weights or counts of quant vs qual factors).
-  3. Compute `combined_score` and `uncapped_rating` via `score_to_rating`.
-  4. Apply distress hardstops via `compute_distress_notches` and `move_notches` → `hardstop_rating`.
-  5. Optionally apply a **sovereign cap** via `apply_sovereign_cap` → `final_rating`.
-  6. Derive the outlook: start from a base outlook based on band position (derive_outlook_band_only), adjust it for distress trends (derive_outlook_with_distress_trend), and, if a sovereign cap is binding and a sovereign outlook is provided, override the issuer outlook with the sovereign outlook.
-  7. Build a narrative `rating_explanation` summarizing the logic.
+The model is intended as an internal **decision‑support** tool and primary quantitative anchor within a broader credit framework, not as a purely predictive PD or capital model.
 
 ---
 
-## 3. Inputs and scales
+## 2. Internal Rating Scale
 
-### 3.1 Quantitative ratios
+The model’s internal rating scale is conceptually aligned with the familiar AAA–D framework used by major agencies.
 
-`fin_t0`, `fin_t1`, `fin_t2` use standard corporate ratios, e.g.:
+- **Symbolic mapping**  
+  Ratings range from `AAA` (highest credit quality) down through `AA`, `A`, `BBB`, `BB`, `B`, `CCC`/`CC`/`C` to `D`, where `D` denotes default or near‑default situations.
 
-- Leverage: `debt_ebitda`, `net_debt_ebitda`, `debt_equity`, `debt_capital`, `ffo_debt`, `fcf_debt`
-- Coverage: `interest_coverage`, `fixed_charge_coverage`, `dscr`
-- Profitability: `ebitda_margin`, `ebit_margin`, `roa`, `roe`
-- Liquidity/other: `capex_dep`, `current_ratio`, `rollover_coverage`
-- Distress: `altman_z` (or components to compute it)
+- **Investment‑grade boundary**  
+  Ratings of `BBB−` and above are treated as **investment grade**; ratings below `BBB−` are **speculative‑grade**.
 
-Each ratio is scored using `RATIO_GRIDS[name] = [(low, high, score), ...]`, with scores in `{0, 25, 50, 75, 100}`.  
-For each ratio, the grid is defined so that more favorable values (for that specific ratio) receive higher scores, whether that means a higher value (e.g. coverage, margins) or a lower value (e.g. leverage).
+- **Ordinal meaning**  
+  The scale provides an **ordinal ranking of relative long‑term default risk**, not a direct PD estimate or spread level. Higher ratings imply strictly lower perceived default risk than lower ratings, but no specific PD is embedded in a symbol.
 
-The quantitative block is also tolerant to missing data: if a ratio is not provided or cannot be scored from `RATIO_GRIDS`, it is skipped, and the quantitative score is computed from the remaining valid ratios.
+The numerical engine operates on a 0–100 internal score, which is then mapped to rating symbols via `SCORE_TO_RATING`.
 
+---
 
-### 3.2 Altman Z‑score
+## 3. Scope and Intended Use
 
-If `altman_z` is missing, the model computes it from components:
+- **Covered population**  
+  Non‑financial corporates with reasonably standard financial reporting (e.g. IFRS, US GAAP or similar), including industrials, services, and many infrastructure‑like entities. The model is **not** designed for banks, insurers, project finance SPVs, or highly structured vehicles.
+
+- **Typical use cases**  
+  - Internal credit grading and limit setting  
+  - Portfolio monitoring and watch‑list identification  
+  - Input into pricing / RAROC frameworks  
+  - Support for internal and external communication where an internal rating scale is used.
+
+- **Exclusions / adaptations**  
+  Sectors with highly idiosyncratic drivers (early‑stage venture, commodity trading houses, complex conglomerates) may require additional sector overlays or bespoke adjustments beyond this generic V2 framework.
+
+---
+
+## 4. Conceptual Framework
+
+V2 is an expert‑designed, rule‑based scorecard that:
+
+- Ingests **QuantInputs** (financial ratios and components) and **QualInputs** (1–5 scores).  
+- Scores each quantitative ratio via **RATIO_GRIDS** and aggregates them into ratio‑family subscores (leverage, coverage, cash flow, profitability, liquidity, Altman Z).
+- Computes an aggregate **quantitative score**, a **qualitative score**, and a **combined score** using effective weights based on counts or configured weights.  
+- Maps the combined score to an **uncapped rating**, then applies overlays:
+  - Distress hardstops / notching (downward only)  
+  - Optional sovereign cap
+
+The methodology is through‑the‑cycle and deterministic to maximize replicability and auditability.
+
+---
+
+## 5. Ratio Families and Inputs
+
+### 5.1 Quantitative inputs (`QuantInputs`)
+
+`QuantInputs` captures ratio data and components (e.g. for Altman Z) per period:
+
+- `fin_t0`, `fin_t1`, `fin_t2`: dictionaries of financial **ratios**.  
+- `components_t0`, `components_t1`, `components_t2`: components for Altman Z (working capital, total assets, retained earnings, EBIT, market value of equity, total liabilities, sales).
+- `peers_t0`: peer group ratios for **relative positioning**.
+
+Ratio coverage includes:
+
+- **Leverage**: `debt_ebitda`, `net_debt_ebitda`, `debt_equity`, `debt_capital`, `ffo_debt`, `fcf_debt`  
+- **Coverage**: `interest_coverage`, `fixed_charge_coverage`, `dscr`, `rollover_coverage`  
+- **Profitability**: `ebitda_margin`, `ebit_margin`, `roa`, `roe`  
+- **Liquidity / investment**: `capex_dep`, `current_ratio`  
+- **Distress**: `altman_z` (or its components)
+
+Each ratio is scored using a grid:
+
+```python
+RATIO_GRIDS[name] = [
+    (low, high, score),  # low <= value < high
+    ...
+]
+```
+Grids are **monotone and contiguous**: more favorable economics always map to higher scores, and every real (non‑NaN) value falls into exactly one band per ratio. Missing or unscorable ratios are skipped, and the quantitative score is computed from available ratios only.
+
+## 5.2 Altman Z‑score
+
+If `altman_z` is not provided for `t0`, the model computes it from the standard components and weights:
 
 - Working capital / total assets  
 - Retained earnings / total assets  
 - EBIT / total assets  
 - Market value of equity / total liabilities  
-- Sales / total assets
+- Sales / total assets  
 
-Then applies the standard Z‑score weights, giving a distress indicator that feeds both the quantitative bucket and the hardstop logic. 
+The resulting Z‑score:
 
-### 3.3 Qualitative factors (V2 convention)
+- Enters the **Altman** ratio family for scoring.  
+- Feeds the **distress overlay**, with thresholds around the classic distress / grey / safe zones.
 
-In **V2**, the qualitative scale is:
+## 5.3 Qualitative inputs (`QualInputs`)
+
+`QualInputs` captures 1–5 qualitative scores:
+
+- `factors_t0`: primary qualitative assessment at `t0`.  
+- `factors_t1`: optional prior‑period qualitative assessment for trend analysis in distress / outlook logic.
+
+**V2 scale convention:**
 
 - `1` = weakest  
 - `5` = strongest  
 
-and mapped as:
+Scores are mapped to 0–100 via `QUAL_SCORE_SCALE`:
 
-- 5 → 100, 4 → 75, 3 → 50, 2 → 25, 1 → 0 (`QUAL_SCORE_SCALE`).
+- 5 → 100  
+- 4 → 75  
+- 3 → 50  
+- 2 → 25  
+- 1 → 0  
 
-This is **inverted vs V1**, where 1 was strongest and 5 weakest. V2’s direction is chosen for consistency with common “higher = better” Likert‑style scoring. 
+Example factor categories (flexible by key):
 
-Qualitative factors
+- Business and industry risk (e.g. `industry_risk`, `revenue_stability`)  
+- Market position and diversification (`market_position`, `revenue_diversification`)  
+- Management & governance (`management_quality`, `governance`, `financial_policy`)
+- Liquidity and refinancing (`liquidity_profile`, `refinancing_risk`, `wc_management_quality`)  
+- Country / legal environment (`sovereign_risk`, `legal_environment`)
 
-The model expects 1–5 scores for a set of qualitative factors, provided via the keys in `factors_t0` / `factors_t1`.  
-In the sample implementation, these include for example:
-
-- Business and industry risk (e.g. industry_risk, revenue_stability)
-- Market position and diversification (e.g. market_position, revenue_diversification)
-- Management quality and governance (e.g. management_quality, governance, financial_policy)
-- Liquidity and refinancing profile (e.g. liquidity_profile, refinancing_risk, wc_management_quality)
-- Country/sovereign and legal environment (e.g. sovereign_risk, legal_environment)
-
-The factor set is flexible in the sense that the model uses whatever keys are present in `factors_t0` / `factors_t1`: 
-if a factor is missing or has an invalid value, it is ignored, and only the remaining valid factors are averaged into the qualitative score.
-
-All valid qualitative factors are treated equally and averaged into a single qualitative score; there is no factor‑specific weighting in V2.
-
-
-## 4. Rating scale, hardstops, and outlook
-
-### 4.1 Rating scale
-
-`SCORE_TO_RATING` defines the mapping from 0–100 scores to the rating scale:
-
-- From `AAA` at the top down to `C`, with cut‑offs such as 95+ = AAA, 90–94 = AA+, …, 0–1 = C.
-
-`score_to_rating(score)` applies this mapping, and `get_rating_band(rating)` returns the [min, max] band for use in outlook logic.
-
-### 4.2 Distress hardstops and notching
-
-Distress hardstops are applied **after** the uncapped rating:
-
-- `DISTRESS_BANDS` specify thresholds and notch downgrades for:
-  - `interest_coverage`
-  - `dscr`
-  - `altman_z` (e.g. <1.8 typical distress zone)
-- `compute_distress_notches` aggregates these (capped by `MAX_DISTRESS_NOTCHES`) and returns:
-  - `distress_notches` (usually ≤ 0),
-  - `hardstop_details` keyed by ratio name.
-- `move_notches(grade, notches)` shifts the rating down the scale to get a **post‑distress** `hardstop_rating`.
-
-This mimics agency‑style “hardstop” logic where very weak coverage or Z‑scores limit the rating regardless of otherwise decent metrics. 
-
-### 4.3 Sovereign cap and outlook
-
-- Sovereign cap:  
-  - `apply_sovereign_cap(issuer_grade, sovereign_grade)` ensures the issuer cannot be rated above the sovereign when `enable_sovereign_cap=True`.  
-  - If the cap binds and a `sovereign_outlook` is provided, the issuer outlook is anchored to the sovereign.
-
-- Outlook:  
-  - `derive_outlook_band_only(combined_score, rating)`  
-    - Compresses the score into the rating band and sets:
-      - Upper edge → `Positive`
-      - Lower edge → `Negative`
-      - Otherwise → `Stable`
-  - `derive_outlook_with_distress_trend(base_outlook, distress_notches, fin_t0, fin_t1)`  
-    - If hardstops active (distress_notches < 0), adjusts the outlook based on whether distress ratios (coverage, DSCR, Z‑score) are improving or deteriorating between t1 and t0.
-    - Improving distress metrics → at most `Stable`, deteriorating → `Negative`.
-
-An additional guard prevents `AAA` with `Positive` outlook: if `final_rating == "AAA"` and `outlook == "Positive"`, it is forced to `Stable`.
+Missing or invalid factors are skipped; all valid ones are equally weighted in the average qualitative score.
 
 ---
 
-## 5. Using the model
+## 6. Overlays and Final Rating Logic
 
-### 5.1 Minimal example
+### 6.1 Distress overlay (hardstops and notching)
+
+After computing the `uncapped_rating` from the combined score, the model applies a **distress overlay** that can only **downgrade**:
+
+- `compute_distress_notches(fin_t0, altman_z)` evaluates distress indicators using `DISTRESS_BANDS`:
+  - `interest_coverage`  
+  - `dscr`  
+  - `altman_z` (e.g. Z < distress threshold)
+
+It returns:
+
+- `distress_notches` (typically ≤ 0, capped by `MAX_DISTRESS_NOTCHES`)  
+- `hardstop_details` (which ratio triggered what)
+
+`move_notches(rating, notches)` then shifts the rating **down** the internal scale to produce the `hardstop_rating`.
+
+The goal is to ensure that very weak coverage or Z‑scores **limit** the issuer’s rating, even if other metrics look stronger.
+
+### 6.2 Sovereign cap overlay
+
+The sovereign cap is an optional overlay applied to the post‑distress rating:
+
+- `apply_sovereign_cap(issuer_grade, sovereign_grade)` ensures that, when enabled, the issuer rating does not exceed the mapped maximum relative to the sovereign rating.  
+- If the cap binds and a `sovereign_outlook` is provided, the issuer’s outlook is anchored to the sovereign.
+
+This reflects the empirical and conceptual view that most domestically‑anchored corporates should not be rated materially above their home sovereign absent strong mitigating factors.
+
+### 6.3 Outlook logic
+
+The outlook is derived in two stages:
+
+1. **Band‑only outlook**
+
+   - `derive_outlook_band_only(combined_score, final_rating)`  
+
+   Within the rating band:
+
+   - Scores near the **upper edge** → `Positive`  
+   - Near the **lower edge** → `Negative`  
+   - Mid‑band → `Stable`
+
+2. **Distress trend adjustment**
+
+   - `derive_outlook_with_distress_trend(base_outlook, distress_notches, fin_t0, fin_t1)`  
+
+   If distress hardstops are active (negative notches applied), the outlook is adjusted based on **trends** in distress ratios (coverage, DSCR, Z‑score) between `t1` and `t0`:
+
+   - Improving distress metrics → at most `Stable`  
+   - Deteriorating metrics → `Negative`
+
+**Additional guards:**
+
+- If `final_rating == "AAA"` and the computed outlook is `Positive`, it is forced to `Stable` (no `AAA Positive` combination).  
+- If a binding sovereign cap and `sovereign_outlook` are present, that outlook can override the issuer‑derived outlook.
+
+---
+
+## 7. Limitations
+
+Key limitations, consistent with agency‑style methodologies, are:
+
+### Historical financial reliance
+
+The model uses lagged financials; it may under‑react to sudden changes between reporting dates, especially for event‑driven credits.
+
+### Expert‑driven thresholds and weights
+
+Ratio breakpoints and weights are designed by expert judgement and market practice rather than fully optimized on historical default data; calibration to PD is outside the V2 scope.
+
+### Limited explicit qualitative modeling
+
+Governance, strategy, competition, and ESG factors are captured via generic qualitative scores but not via sector‑specific, data‑heavy models.
+
+### Through‑the‑cycle emphasis
+
+The focus on structural and normalized metrics improves stability but can slow response to regime shifts or severe macro shocks.
+
+### Model‑risk and parameter uncertainty
+
+As with any scorecard, specification and parameter risk exist and must be managed via validation, monitoring, and challenger analysis.
+
+---
+
+## 8. Model Boundaries (“What This Model Is Not”)
+
+This V2 model is **not**:
+
+- A regulatory **IRB** model, and it is **not calibrated** to Basel capital requirements.
+- A **market‑implied** model based on bond or CDS spreads.  
+- A **structural asset‑value model** in the Merton tradition that explicitly models firm asset value and volatility.   
+- A standalone **PD/LGD engine** for capital or pricing.
+
+It is an internal, deterministic **rating scorecard** that provides an ordinal ranking of credit quality to be combined with other models and expert judgement.
+
+---
+
+## 9. Governance and Outputs
+
+### 9.1 `RatingOutputs` as authoritative record
+
+`RatingOutputs` is the **authoritative record** of each model run:
+
+- Scores: `quantitative_score`, `qualitative_score`, `combined_score`, `peer_score`  
+- Ratings: `uncapped_rating`, `hardstop_rating`, `final_rating`, `distress_notches`  
+- Overlays & outlook: `sovereign_rating`, `sovereign_outlook`, `outlook`, `hardstop_triggered`, `flags`  
+- Diagnostics: `bucket_avgs`, `altman_z_t0`, `hardstop_details`, `rating_explanation`
+
+This supports full replay, explainability, and integration into audit and workflow systems. 
+
+### 9.2 Governance philosophy
+
+The model is governed under a formal model‑risk framework:
+
+- Transparent, deterministic implementation in Python with documented grids and overlays.  
+- Separation of development / maintenance from independent validation.  
+- Regular validation, back‑testing, and monitoring of performance metrics and overrides.  
+- Boolean flags for data gaps and configuration issues to support exception handling and governance workflows.
+  
+## 10. Using the Model (Code Sketch)
 
 ```python
 from rating_model import RatingModel, QuantInputs, QualInputs  # adapt path as needed
@@ -213,3 +294,4 @@ result = model.compute_final_rating(
 
 print(result.final_rating, result.outlook)
 print(result.rating_explanation)
+
