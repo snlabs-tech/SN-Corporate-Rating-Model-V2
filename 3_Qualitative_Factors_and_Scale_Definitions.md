@@ -160,3 +160,4 @@ In V2, the outlook logic:
 - Adjusts this outlook using **distress trends** (based primarily on quantitative distress ratios).  
 - If a sovereign cap is binding and a sovereign outlook is provided, the issuer outlook is overridden and anchored to the sovereign outlook.
 
+
