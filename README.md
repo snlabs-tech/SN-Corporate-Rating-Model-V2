@@ -28,11 +28,12 @@ It is designed as a **transparent, documentation-heavy reference implementation*
 
 ## 🚀 Quickstart (5 Minutes)
 
-### 1. Clone this repository
+```
+1. Clone this repository:
 
-```bash
-git clone https://github.com/snlabs-tech/SN-Corporate-Rating-Model-V2.git
-cd SN-Corporate-Rating-Model-V2
+   bash
+   git clone https://github.com/snlabs-tech/SN-Corporate-Rating-Model-V2.git
+   cd SN-Corporate-Rating-Model-V2
 ```
 
 ### 2. Open the main notebook
