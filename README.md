@@ -25,16 +25,14 @@ It is designed as a **transparent, documentation-heavy reference implementation*
 - **Outlook workflow**: [6_Corporate_Rating_Outlook_Workflow.md](6_Corporate_Rating_Outlook_Workflow.md)
 
 ---
+### 🚀 Quickstart (5 Minutes)
 
-## 🚀 Quickstart (5 Minutes)
+### 1. Clone this repository:
 
-```
-1. Clone this repository:
-
-   bash
+   ```bash
    git clone https://github.com/snlabs-tech/SN-Corporate-Rating-Model-V2.git
    cd SN-Corporate-Rating-Model-V2
-```
+   ```
 
 ### 2. Open the main notebook
 
