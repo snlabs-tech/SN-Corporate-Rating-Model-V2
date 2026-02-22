@@ -56,7 +56,7 @@ Inspect the sample outputs:
 
 ### 3. Run the script demo (optional)
 
-From the repository root (the main folder with this 'README.md'), run:
+From the repository root (the main folder with this `README.md`), run:
 
 ```
 rating_model_V2_demo.py
