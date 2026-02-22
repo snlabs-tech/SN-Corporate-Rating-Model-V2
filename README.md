@@ -42,11 +42,9 @@ Open in **Jupyter Notebook** or **VS Code**:
 7_corporate_rating_model_V2.ipynb
 ```
 
-### 3. Run the example
+Then run:
 
-Execute the cells in order:
-
-**Kernel → Restart & Run All**
+- Menu: Kernel → Restart & Run All
 
 Inspect the sample outputs:
 
@@ -55,6 +53,15 @@ Inspect the sample outputs:
 - Sovereign cap  
 - Final rating  
 - Rating outlook  
+
+### 3. Run the script demo (optional)
+
+From the repository root (the main folder with this 'README.md'), run:
+
+```
+rating_model_V2_demo.py
+```
+This script uses sample financials and qualitative factors to compute a full issuer rating and prints the key outputs to the console.
 
 ---
 
