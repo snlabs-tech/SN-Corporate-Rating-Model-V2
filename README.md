@@ -58,7 +58,7 @@ Inspect the sample outputs:
 
 From the repository root (the main folder with this `README.md`), run:
 
-```
+```bash
 python rating_model_V2_demo.py
 ```
 This script uses sample financials and qualitative factors to compute a full issuer rating and prints the key outputs to the console.
