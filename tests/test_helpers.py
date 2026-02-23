@@ -15,7 +15,7 @@ from sn_rating_v2.helpers import (
     derive_outlook_band_only,
     derive_outlook_with_distress_trend,
 )
-from sn_rating import config
+from sn_rating_v2 import config
 
 
 def test_score_ratio_basic():
