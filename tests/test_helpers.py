@@ -1,7 +1,7 @@
 # SN-Corporate-Rating-Model-V2/tests/test_helpers.py
 import math
 
-from sn_rating.helpers import (
+from sn_rating_V2.helpers import (
     score_ratio,
     score_qual_factor_numeric,
     compute_altman_z_from_components,
