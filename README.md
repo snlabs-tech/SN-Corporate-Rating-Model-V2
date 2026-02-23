@@ -71,3 +71,13 @@ For a detailed explanation of the implementation, see:
 
 - Notebook: `7_corporate_rating_model_V2.ipynb`
 - Code walkthrough document: `8_rating_model_V2_code_walkthrough.docx`
+
+---
+
+## Testing
+
+This project uses pytest. To run the test suite:
+
+```bash
+pytest
+```
