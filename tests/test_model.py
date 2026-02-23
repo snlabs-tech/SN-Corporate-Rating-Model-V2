@@ -1,9 +1,9 @@
 # SN-Corporate-Rating-Model-V2/tests/test_model.py
 
 # tests/test_model.py
-from sn_rating.model import RatingModel
-from sn_rating.datamodel import QuantInputs, QualInputs
-from sn_rating import config
+from sn_rating_v2.model import RatingModel
+from sn_rating_v2.datamodel import QuantInputs, QualInputs
+from sn_rating_v2 import config
 
 
 def _setup_simple_config():
