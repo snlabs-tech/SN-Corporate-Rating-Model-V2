@@ -1,0 +1,1 @@
+- Added unit tests for helper functions and integration tests for RatingModel.
