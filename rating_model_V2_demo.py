@@ -1,8 +1,16 @@
 # SN-Corporate-Rating-Model-V2
 
 import logging
+import sys
+from pathlib import Path
+
+repo_root = Path(__file__).resolve().parent   # folder where the .py file lives
+src_path = repo_root / "src"
+if str(src_path) not in sys.path:
+    sys.path.insert(0, str(src_path))
 
 from sn_rating_v2 import QuantInputs, QualInputs, RatingModel
+
 
 
 def main() -> None:
