@@ -13,7 +13,9 @@ from .config import (
     RATING_WEIGHTS,
     DISTRESS_BANDS,
     MAX_DISTRESS_NOTCHES,
+    LOWER_BETTER_RATIOS,  # added this as a part of the peer positioning fix
 )
+
 
 
 def score_ratio(name: str, value: float) -> Optional[float]:
