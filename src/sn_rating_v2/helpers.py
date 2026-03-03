@@ -53,21 +53,39 @@ def compute_peer_score(
     fin_current: Dict[str, float],
     peers: Dict[str, List[float]],
 ) -> Optional[float]:
+    """
+    Peer positioning score that respects LOWER_BETTER_RATIOS:
+    leverage ratios: higher than peers is worse;
+    coverage/profit ratios: lower than peers is worse.
+    """
     under = 0
     total = 0
+
     for rname, peer_vals in peers.items():
         if rname not in fin_current or not peer_vals:
             continue
+
         cp = fin_current[rname]
         peer_avg = mean(peer_vals)
         if peer_avg == 0:
             continue
+
         total += 1
-        if cp < peer_avg * 0.9:
-            under += 1
+
+        if rname in LOWER_BETTER_RATIOS:
+            # Lower is better (e.g. leverage): worse if significantly higher than peers
+            if cp > peer_avg * 1.10:
+                under += 1
+        else:
+            # Higher is better (e.g. coverage, margins): worse if significantly lower than peers
+            if cp < peer_avg * 0.90:
+                under += 1
+
     if total == 0:
         return None
+
     under_share = under / total
+
     if under_share <= 0.10:
         return 100.0
     elif under_share <= 0.30:
