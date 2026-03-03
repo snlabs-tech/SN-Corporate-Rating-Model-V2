@@ -81,3 +81,20 @@ This project uses pytest. To run the test suite:
 ```bash
 pytest
 ```
+
+---
+
+## Bugfixes and changes
+
+### Peer positioning for lower-is-better ratios
+
+Earlier versions of the model treated all ratios where the issuer was below the
+peer average as underperformance. For leverage ratios where lower values are
+better (e.g. debt_ebitda, net_debt_ebitda, debt_equity, debt_capital), this was
+incorrect.
+
+The current implementation uses the `LOWER_BETTER_RATIOS` set in
+`sn_rating_v2/config.py` together with the updated `compute_peer_score` in
+`sn_rating_v2/helpers.py` to respect the direction of each ratio in peer
+comparison. Only the peer positioning component is affected; the core ratio
+grids and distress logic are unchanged.
