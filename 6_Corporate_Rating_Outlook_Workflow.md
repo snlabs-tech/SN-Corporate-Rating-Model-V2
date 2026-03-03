@@ -300,4 +300,4 @@ Outlook cannot be more optimistic than the distress state: it is either Stable (
 
 The sovereign’s rating and outlook become the effective ceiling, and the issuer’s outlook is anchored to that stance, with conservative rules to avoid Positive signals under a binding cap.
 
-This structure keeps the outlook consistent with the main driver of the rating in each case: pure score, dis
+This structure keeps the outlook consistent with the main driver of the rating in each case: pure score, distress overlay, or sovereign ceiling.
