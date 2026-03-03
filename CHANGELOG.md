@@ -1,5 +1,5 @@
 - Added unit tests for helper functions and integration tests for RatingModel.
-## [0.2.1] – 2026-03-03
+## 2026-03-03
 
 ### Fixed
 - Peer positioning bug: for leverage ratios where lower values are better
