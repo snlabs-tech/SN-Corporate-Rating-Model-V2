@@ -217,6 +217,14 @@ RATIO_GRIDS: Dict[str, List[Tuple[float, float, float]]] = {
     ],
 }
 
+# Ratios where lower numeric values indicate better credit quality
+LOWER_BETTER_RATIOS = {
+    "debt_ebitda",
+    "net_debt_ebitda",
+    "debt_equity",
+    "debt_capital",
+}
+
 # Qualitative 1–5 scale → score
 QUAL_SCORE_SCALE: Dict[int, float] = {
     5: 100.0,
