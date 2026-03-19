@@ -1,3 +1,11 @@
+> ⚠️ Deprecation notice  
+> This repository is a **legacy** version of the SN-Rating-Model and is kept for
+> historical and reference purposes only.  
+> It is **deprecated** and not aligned with the latest model design, configuration
+> or documentation.  
+> For any new work, please use the repository:  
+> (https://github.com/snlabs-tech/SN-Rating-Model)
+
 # SN Corporate Rating Model V2
 
 This repository contains a **rule-based corporate credit rating engine** for non-financial corporates.
